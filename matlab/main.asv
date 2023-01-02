@@ -1,0 +1,100 @@
+close all;
+clear
+urdf_path = 'IndyDualArm.urdf'
+robot = importrobot(urdf_path)
+fname = 'MR_info.json'; 
+fid = fopen(fname); 
+raw = fread(fid,inf); 
+str = char(raw'); 
+fclose(fid); 
+val = jsondecode(str);
+
+relSlist = val.relSlist;
+relBlist = val.relBlist;
+relM = val.relM;
+
+home_pos_r =   [-0.186, -0.886, -1.298 ,-0.643, -0.960, 0.070];
+home_pos_l =   [ 0.186 ,0.886 ,1.298, 0.643 ,0.960 ,-0.070];
+
+t =0;
+dt = 0.001;
+q_rel = [-flip(home_pos_r),home_pos_l]';
+
+qdot_rel = zeros(12,1);
+while(1)
+    Xd = [-1 0 0 0.2*sin(2*pi*t*2); 
+           0 1 0 0.2*cos(2*pi*t*2); 
+           0 0 -1 0.4+0.1*sin(2*pi*t) ; 
+           0 0 0 1];
+    T_rel = FKinSpace(relM,relSlist,q_rel);
+    Jb = JacobianBody(relBlist,q_rel');
+    A = Jb*Jb';
+    [u_rel,lambda_rel] = eig(A);
+    u1 = u_rel(:,1);
+    um = u_rel(:,end);
+    
+    lambda1 = lambda_rel(1,1);
+    lambdam = lambda_rel(end,end);
+    P1 =1/lambda1* u1*u1';
+    Pm =1/lambdam* um*um';
+    dvecJb = derivativeJacobianBody(Jb);
+    mu1 = sqrt(lambda1/lambdam);
+    dmu1 = mu1*vec((Pm-P1)*Jb)'*dvecJb;
+    pinvJb = pinv(Jb);
+    Xe = se3ToVec(MatrixLog6(TransInv(T_rel)*Xd));
+%     qdot_rel = 200*pinvJb*Xe;
+    qdot_rel = dmu1;
+    q_rel = q_rel+qdot_rel*dt;
+    q_r = flip(-q_rel(1:6));
+    q_l = (q_rel(7:end));
+    config=setJoint(robot,q_r,q_l);
+    show(robot,config,"FastUpdate",1,"PreservePlot",0);
+    t = t+dt;
+    
+    view(90,15);
+    axis([-1.0 1.0 -1.0 1.0 0 1.5]);
+    drawnow;
+end
+
+
+
+
+function config = setJoint(robot,q_r,q_l)
+    config = homeConfiguration(robot);
+    for i =1:1:6
+        config(i).JointPosition = -q_r(i);
+        config(i+6).JointPosition = -q_l(i);
+    end
+end
+function dvecJs_dq = derivativeJacobianSpace(Js)
+    [m,n]=size(Js);
+    dvecJs_dq = zeros(m*n,n);
+    for i =1:1:n
+        for j = 1:1:n
+            if(i>j) 
+                dvecJs_dq(m*i:m*(i+1),j) = ad(Js(:,i))*Js(:,j);
+            
+            else  
+                dvecJs_dq(m*i:m*(i+1),j)=zeros(6,1);
+            end
+        end
+    end
+end
+function dvecJs_dq = derivativeJacobianBody(Js)
+    [m,n]=size(Js);
+    dvecJs_dq = zeros(m*n,n);
+    for i =1:1:n
+        for j = 1:1:n
+            if(i<j) 
+                dvecJs_dq(m*(i-1)+1:m*(i),j) = ad(Js(:,i))*Js(:,j);
+            
+            else  
+                dvecJs_dq(m*(i-1)+1:m*(i),j)=zeros(6,1);
+            end
+        end
+    end
+end
+function v = vec(F)
+    [m,n] = size(F);
+    v = reshape(F,m*n,1);
+end
